@@ -29,22 +29,22 @@ PQueue newQueue() {
     queue->head = NULL;
     queue->tail = NULL;
     queue->size = 0;
+    queue->finished = false;
     pthread_mutex_init(&queue->lock, NULL);
+    pthread_cond_init(&queue->cond, NULL);
     return queue;
 }
 
 // Add sequence of numbers to the queue
 void enqueue(PQueue queue, int* numbers, int size) {
-    if (queue == NULL || numbers == NULL || size == 0) return; // Invalid input
-    
-    pthread_mutex_lock(&queue->lock); // Lock the queue
+    if (queue == NULL || numbers == NULL) return; // Invalid input
     
     int* numbersCopy = (int*)malloc(size * sizeof(int)); // Copy the numbers to new array
-    for (int i = 0; i < size; i++) {
-        numbersCopy[i] = numbers[i];
-    }
+    memcpy(numbersCopy, numbers, size * sizeof(int));
 
     PNode node = newNode(numbersCopy, size); // Create a new node
+
+    pthread_mutex_lock(&queue->lock); // Lock the queue
     
     if (queue->head == NULL) { // Adds first node
         queue->head = node;
@@ -54,17 +54,18 @@ void enqueue(PQueue queue, int* numbers, int size) {
         queue->tail = node;
     }
     queue->size++;
+
+    pthread_cond_signal(&queue->cond); // Signal to the threads that there is a new node
     pthread_mutex_unlock(&queue->lock);
 }
 
 // Return sequence of numbers from the queue
 PNode dequeue(PQueue queue) {
     if (queue == NULL) return NULL; // Invalid input
-    
-    pthread_mutex_lock(&queue->lock); // Lock the queue
+
+    pthread_mutex_lock(&queue->lock);
 
     if (queue->head == NULL) { // Empty queue
-        pthread_mutex_unlock(&queue->lock);
         return NULL;
     }
     
@@ -77,7 +78,7 @@ PNode dequeue(PQueue queue) {
     }
     
     pthread_mutex_unlock(&queue->lock);
-    
+
     return node;
 }
 
@@ -92,39 +93,58 @@ void freeQueue(PQueue queue) {
         free(node);
     }
     pthread_mutex_destroy(&queue->lock);
+    pthread_cond_destroy(&queue->cond);
     free(queue);
 }
 
 // Thread function to check if numbers are prime
-void *thread_func(PQueue queue) {
+void *thread_func(void* arg) {
+    PQueue queue = (PQueue)arg;
     PNode node;
-    int counter = 0;
     
-    while ((node = dequeue(queue)) != NULL) { 
-        for (int i = 0; i < node->size; i++) {
-            if (isPrime(node->numbers[i])) {
-                counter++;
-            }
-        }
-        free(node->numbers);
-        free(node);
-
+    while (1) {
+        int counter = 0;
         pthread_mutex_lock(&queue->lock);
-        total_prime_numbers += counter; // Update the total prime numbers
+
+        if (queue->head == NULL && queue->finished) {
+            pthread_mutex_unlock(&queue->lock);
+            break;
+        }
+
+        while (queue->head == NULL && !queue->finished) {
+            pthread_cond_wait(&queue->cond, &queue->lock);
+        }
+
         pthread_mutex_unlock(&queue->lock);
-        counter = 0;    
+        node = dequeue(queue);
+        if (node != NULL) {
+            for (int i = 0; i < node->size; i++) {
+                if (isPrime(node->numbers[i])) {
+                    counter++;
+                }
+            }
+        
+            free(node->numbers);
+            free(node); 
+            pthread_mutex_lock(&queue->lock);
+            total_prime_numbers += counter; // Update the total number of prime numbers
+            pthread_mutex_unlock(&queue->lock);
+        }
     }
-    
-    
+    return NULL;
 }
 
 int main() {
     PQueue queue = newQueue();
     int num;
-    int* numbers = (int*)malloc(MAX_NUMBERS * sizeof(int)); // Array to store numbers to check
+    int numbers[MAX_NUMBERS] ; // Array to store numbers to check
     int size = 0;
     pthread_t threads[MAX_THREADS];
-    
+
+    // Create threads
+    for (int i = 0; i < MAX_THREADS; i++) {
+        pthread_create(&threads[i], NULL, thread_func, (void*) queue);
+    }
     
     // Read numbers from stdin until end of file, spilt the numbers into chunks
     while (scanf("%d", &num) != EOF) {
@@ -140,13 +160,8 @@ int main() {
         enqueue(queue, numbers, size);
     }
 
-    free(numbers);
-
-    // Create threads
-    for (int i = 0; i < MAX_THREADS; i++) {
-        pthread_create(&threads[i], NULL, (void*) thread_func, queue);
-    }
-
+    queue->finished = true; // Signal that there are no more numbers to check
+    pthread_cond_broadcast(&queue->cond);
     // Wait for threads to finish
     for (int i = 0; i < MAX_THREADS; i++) {
         pthread_join(threads[i], NULL);

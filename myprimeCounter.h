@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <string.h>
 
 #define MAX_NUMBERS 100000
 #define MAX_THREADS 10
@@ -19,7 +20,9 @@ typedef struct queue {
     PNode head;
     PNode tail;
     int size;
+    bool finished;
     pthread_mutex_t lock;
+    pthread_cond_t cond;
 } Queue, *PQueue;
 
 /*-----Functions-----*/
@@ -29,5 +32,5 @@ void enqueue(PQueue, int*, int);
 PNode dequeue(PQueue);
 void freeQueue(PQueue);
 bool isPrime(int);
-void *thread_func(PQueue);
+void *thread_func(void*);
 #endif
